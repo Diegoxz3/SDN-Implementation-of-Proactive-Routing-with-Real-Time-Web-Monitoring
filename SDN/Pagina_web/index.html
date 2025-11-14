@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>NetWeb • Topología SDN</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<style>
+  :root { color-scheme: light dark; }
+  .bg-canvas { background: radial-gradient(ellipse at center, rgba(39,39,42,.9) 0%, rgba(24,24,27,1) 60%); }
+  .link { stroke:#a1a1aa; stroke-width:1.6px; }
+  .link.path { stroke:#22c55e; stroke-width:4px; }
+  .link.added { stroke:#10b981; stroke-width:3px; filter: drop-shadow(0 0 6px #10b981); }
+  .link.removed { stroke:#ef4444; stroke-dasharray:5 4; stroke-width:3px; filter: drop-shadow(0 0 6px #ef4444); }
+  .link.excluded { opacity:.35; stroke-dasharray:3 5; }
+  .link.portdown { stroke:#ef4444; stroke-width:3px; filter: drop-shadow(0 0 6px #ef4444); }
+  .switch { fill:#2563eb; filter: drop-shadow(0 2px 6px rgba(0,0,0,.3)); }
+  .label { font-size:12px; fill:#e5e7eb; pointer-events:none; text-shadow:0 1px 2px #000; }
+  .legend-swatch { width:16px; height:8px; display:inline-block; border-radius:2px; }
+</style>
+</head>
+<body class="bg-zinc-900 text-zinc-100">
+  <!-- Top bar -->
+  <nav class="flex items-center justify-between px-5 py-3 border-b border-zinc-800 bg-zinc-950">
+    <div class="flex items-center gap-3">
+      <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+      <h1 class="text-lg font-semibold">NetWeb • SDN Dashboard</h1>
+      <span id="mode" class="ml-3 text-xs border border-zinc-700 rounded-full px-2 py-0.5">—</span>
+      <span id="status" class="ml-2 text-xs border border-zinc-700 rounded-full px-2 py-0.5">Conectando…</span>
+    </div>
+    <div class="hidden md:flex items-center gap-3 text-xs text-zinc-400">
+      <span id="statNodes" class="border border-zinc-700 rounded px-2 py-0.5">Nodos: 0</span>
+      <span id="statLinks" class="border border-zinc-700 rounded px-2 py-0.5">Enlaces: 0</span>
+      <span id="statCost"  class="border border-zinc-700 rounded px-2 py-0.5">Costo: —</span>
+    </div>
+  </nav>
+
+  <div class="grid md:grid-cols-[360px,1fr] h-[calc(100vh-52px)]">
+    <!-- Sidebar -->
+    <aside class="border-r border-zinc-800 p-5 space-y-6 overflow-auto">
+      <section class="space-y-2">
+        <h2 class="text-sm font-semibold text-zinc-300">Controles</h2>
+        <div class="grid grid-cols-2 gap-2">
+          <button id="btnHops" class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg px-3 py-2 text-sm">Modo: Hops</button>
+          <button id="btnDistrak" class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg px-3 py-2 text-sm">Modo: Distrak</button>
+          <button id="btnReinstall" class="col-span-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg px-3 py-2 text-sm">Reinstalar flujos</button>
+        </div>
+      </section>
+
+      <section class="space-y-2">
+        <h2 class="text-sm font-semibold text-zinc-300">Camino más corto</h2>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="text-xs">Origen
+            <select id="src" class="w-full mt-1 bg-zinc-800 border border-zinc-700 rounded p-2"></select>
+          </label>
+          <label class="text-xs">Destino
+            <select id="dst" class="w-full mt-1 bg-zinc-800 border border-zinc-700 rounded p-2"></select>
+          </label>
+          <button id="btnPath" class="col-span-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg px-3 py-2 text-sm">Calcular</button>
+          <div id="pathMsg" class="col-span-2 text-sm text-zinc-300"></div>
+        </div>
+      </section>
+
+      <section class="space-y-2">
+        <h2 class="text-sm font-semibold text-zinc-300">Vista</h2>
+        <label class="inline-flex items-center gap-2 text-sm">
+          <input id="chkLabels" type="checkbox" class="accent-indigo-500"/> Mostrar etiquetas (sN)
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm">
+          <input id="chkWidth" type="checkbox" class="accent-indigo-500" checked/> Ancho por BW
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm">
+          <input id="chkColor" type="checkbox" class="accent-indigo-500" checked/> Color por BW
+        </label>
+        <!-- NUEVO: color por métrica -->
+        <div class="text-xs text-zinc-400 flex items-center gap-2">
+          <span>Color por métrica:</span>
+          <select id="selMetricColor" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1">
+            <option value="none" selected>Ninguno</option>
+            <option value="tput">Throughput</option>
+            <option value="loss">Pérdida (%)</option>
+          </select>
+        </div>
+        <label class="inline-flex items-center gap-2 text-sm pt-1">
+          <input id="chkLinkMetrics" type="checkbox" class="accent-indigo-500"/> Mostrar métricas en etiquetas
+        </label>
+        <div class="flex items-center gap-3 text-xs text-zinc-400">
+          <span>BW baja</span>
+          <span class="legend-swatch" style="background:#ef4444"></span>
+          <span class="legend-swatch" style="background:#f59e0b"></span>
+          <span class="legend-swatch" style="background:#10b981"></span>
+          <span>BW alta</span>
+        </div>
+        <div class="flex gap-2 pt-2">
+          <button id="btnSVG" class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs">Exportar SVG</button>
+        </div>
+      </section>
+
+      <!-- NUEVO: Estadísticas en vivo -->
+      <section class="space-y-2">
+        <h2 class="text-sm font-semibold text-zinc-300">Estadísticas (live)</h2>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="bg-zinc-950 border border-zinc-800 rounded p-2">
+            <div class="text-zinc-400">Throughput total</div>
+            <div id="mTput" class="text-sm font-semibold">—</div>
+          </div>
+          <div class="bg-zinc-950 border border-zinc-800 rounded p-2">
+            <div class="text-zinc-400">Pérdida promedio</div>
+            <div id="mLoss" class="text-sm font-semibold">—</div>
+          </div>
+          <div class="bg-zinc-950 border border-zinc-800 rounded p-2 col-span-2">
+            <div class="text-zinc-400">Ventana</div>
+            <div id="mWin" class="text-sm font-semibold">—</div>
+          </div>
+        </div>
+        <div>
+          <h3 class="text-xs text-zinc-400 mb-1">Top enlaces por throughput</h3>
+          <ol id="topLinks" class="list-decimal pl-5 text-xs text-zinc-300 space-y-1"></ol>
+        </div>
+      </section>
+
+      <!-- NUEVO: Métricas de camino -->
+      <section class="space-y-2">
+        <h2 class="text-sm font-semibold text-zinc-300">Métricas del camino</h2>
+        <div id="pathMetrics" class="text-xs text-zinc-300 bg-zinc-950 border border-zinc-800 rounded p-2">
+          —
+        </div>
+      </section>
+
+      <section class="space-y-2">
+        <h2 class="text-sm font-semibold text-zinc-300">Detalle</h2>
+        <pre id="detail" class="bg-zinc-950 rounded-lg p-3 border border-zinc-800 text-xs overflow-auto h-48">Selecciona un nodo…</pre>
+      </section>
+    </aside>
+
+    <!-- Canvas -->
+    <main class="relative bg-canvas">
+      <svg id="graph" class="w-full h-full"></svg>
+    </main>
+  </div>
+
+<script>
+'use strict';
+
+/* ===== Layout fijo tipo NSFNET (coordenadas normalizadas 0..1) ===== */
+const USE_FIXED_LAYOUT = true; // ← deja true para forzar siempre este layout
+const FIXED_LAYOUT = {
+  "1":[0.07,0.58], "2":[0.13,0.82], "3":[0.20,0.37], "4":[0.47,0.88],
+  "5":[0.62,0.80], "6":[0.28,0.52], "7":[0.38,0.64], "8":[0.52,0.55],
+  "9":[0.63,0.50], "10":[0.78,0.50], "11":[0.74,0.33], "12":[0.90,0.18],
+  "13":[0.95,0.38], "14":[0.91,0.60]
+};
+function applyFixedLayout(nodes, W, H){
+  nodes.forEach(n => { const p = FIXED_LAYOUT[n.id]; if (p){ n.fx = W*p[0]; n.fy = H*p[1]; }});
+}
+/* =================================================================== */
+
+const API = location.origin; // Flask 5000
+const svg = d3.select("#graph");
+const root = svg.append("g");            // zoom root
+const gLinksG = root.append("g");
+const gLinkLabelsG = root.append("g");
+const gNodesG = root.append("g");
+const gLabelsG = root.append("g");
+
+let linkSel = gLinksG.selectAll("line");
+let linkLabelSel = gLinkLabelsG.selectAll("text");
+let nodeSel = gNodesG.selectAll("circle");
+let nodeLabelSel = gLabelsG.selectAll("text");
+
+let sim, nodes=[], links=[], linkLabelOn=false, widthByBW=true, colorByBW=true;
+let metricColorMode = 'none'; // 'none' | 'tput' | 'loss'
+let metricsCache = null; // último /metrics
+
+const statusEl = document.getElementById("status");
+const modeEl   = document.getElementById("mode");
+const statN    = document.getElementById("statNodes");
+const statL    = document.getElementById("statLinks");
+const statC    = document.getElementById("statCost");
+const srcSel   = document.getElementById("src");
+const dstSel   = document.getElementById("dst");
+const pathMsg  = document.getElementById("pathMsg");
+const detail   = document.getElementById("detail");
+
+// NUEVO: elementos métricas
+const mTput = document.getElementById("mTput");
+const mLoss = document.getElementById("mLoss");
+const mWin  = document.getElementById("mWin");
+const topLinksEl = document.getElementById("topLinks");
+const pathMetricsEl = document.getElementById("pathMetrics");
+
+const W = () => svg.node().clientWidth || innerWidth;
+const H = () => svg.node().clientHeight || innerHeight;
+
+document.getElementById("btnHops").onclick      = async ()=> { modeEl.textContent='hops'; await fetch(API+'/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'hops'})}); };
+document.getElementById("btnDistrak").onclick   = async ()=> { modeEl.textContent='distrak'; await fetch(API+'/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'distrak'})}); };
+document.getElementById("btnReinstall").onclick = async ()=> { await fetch(API+'/reinstall',{method:'POST'}); toast('Flujos reinstalados'); };
+document.getElementById("btnPath").onclick      = (e)=>{ e.preventDefault(); calcPath(); };
+document.getElementById("chkLabels").onchange   = (e)=> nodeLabelSel.style("display", e.target.checked ? null : "none");
+document.getElementById("chkWidth").onchange    = (e)=> { widthByBW = e.target.checked; styleLinks(); };
+document.getElementById("chkColor").onchange    = (e)=> { colorByBW = e.target.checked; styleLinks(); };
+document.getElementById("btnSVG").onclick       = ()=> exportSVG();
+// NUEVO listeners
+document.getElementById("selMetricColor").onchange = (e)=> { metricColorMode = e.target.value; styleLinks(); };
+document.getElementById("chkLinkMetrics").onchange = ()=> refreshLinkLabels();
+
+svg.call(d3.zoom().scaleExtent([0.2, 3]).on("zoom", ev => root.attr("transform", ev.transform)));
+
+// ==== helpers ====
+const edgeKey = (a,b) => [String(a),String(b)].sort().join("--");
+const edgeKeyFrom = e => edgeKey(e.source.id ?? e.source, e.target.id ?? e.target);
+
+function scaleWidth(bw){
+  if(!widthByBW) return 2;
+  const b = Math.max(1, Math.min(60, +bw||1));
+  return d3.scaleLinear().domain([10,50]).range([1.5,6])(b);
+}
+function scaleColorBW(bw){
+  const b = Math.max(1, Math.min(60, +bw||1));
+  return d3.scaleLinear().domain([10,30,50]).range(['#ef4444','#f59e0b','#10b981'])(b);
+}
+function scaleColorMetric(value, mode){
+  if (value == null || isNaN(value)) return '#a1a1aa';
+  if (mode === 'tput'){
+    // map Mbps/Gbps scale
+    const mbps = value / 1e6;
+    return d3.scaleLinear().domain([10, 1000, 10000]).range(['#ef4444','#f59e0b','#10b981'])(mbps);
+  } else if (mode === 'loss'){
+    return d3.scaleLinear().domain([0, 1, 5, 20]).range(['#10b981','#f59e0b','#ef4444','#991b1b'])(+value);
+  }
+  return '#a1a1aa';
+}
+
+function syncStats(){
+  statN.textContent = `Nodos: ${nodes.length}`;
+  statL.textContent = `Enlaces: ${links.length}`;
+  const opts = nodes.map(n=>n.id).sort((a,b)=>(+a)-(+b));
+  srcSel.innerHTML = opts.map(o=>`<option>${o}</option>`).join("");
+  dstSel.innerHTML = opts.map(o=>`<option>${o}</option>`).join("");
+}
+
+function drawLinks(){
+  // Lines
+  linkSel = gLinksG.selectAll("line").data(links, d=>edgeKeyFrom(d))
+    .join(
+      enter => enter.append("line")
+                    .attr("class","link")
+                    .attr("stroke-linecap","round"),
+      update => update,
+      exit   => exit.remove()
+    );
+  // Labels
+  linkLabelSel = gLinkLabelsG.selectAll("text").data(links, d=>edgeKeyFrom(d))
+    .join(
+      enter => enter.append("text").attr("class","text-[10px] fill-zinc-300"),
+      update => update,
+      exit   => exit.remove()
+    );
+  refreshLinkLabels();
+  styleLinks();
+}
+
+function refreshLinkLabels(){
+  const show = document.getElementById('chkLabels').checked;
+  const showMetrics = document.getElementById('chkLinkMetrics').checked;
+  linkLabelSel
+    .text(d=>{
+      const base = `bw:${d.bw} w:${(+d.weight).toFixed(3)}`;
+      if (!showMetrics || !metricsCache) return base;
+      const m = lookupLinkMetric(d.source.id ?? d.source, d.target.id ?? d.target);
+      if (!m) return base;
+      const t = (m.t_bps/1e6).toFixed(1) + ' Mb/s';
+      const lp = (m.loss_pct!=null) ? (m.loss_pct).toFixed(2)+'%' : '—';
+      return `${base} • t:${t} • loss:${lp}`;
+    })
+    .style("display", show ? null : "none");
+}
+
+function drawNodes(){
+  nodeSel = gNodesG.selectAll("circle").data(nodes, d=>d.id)
+    .join(
+      enter => {
+        const c = enter.append("circle").attr("r",10).attr("class","switch")
+                       .on("click",(ev,d)=> showDetail(d));
+        return c;
+      },
+      update => update,
+      exit   => exit.remove()
+    );
+  nodeLabelSel = gLabelsG.selectAll("text").data(nodes, d=>d.id)
+    .join(
+      enter => enter.append("text").attr("class","label").text(d=> "s"+d.id),
+      update => update.text(d=> "s"+d.id),
+      exit   => exit.remove()
+    ).style("display","none");
+}
+
+function styleLinks(){
+  linkSel
+    .attr("stroke", d=>{
+      if (metricColorMode === 'tput' && metricsCache){
+        const m = lookupLinkMetric(d.source.id ?? d.source, d.target.id ?? d.target);
+        return scaleColorMetric(m ? m.t_bps : null, 'tput');
+      }
+      if (metricColorMode === 'loss' && metricsCache){
+        const m = lookupLinkMetric(d.source.id ?? d.source, d.target.id ?? d.target);
+        return scaleColorMetric(m ? m.loss_pct : null, 'loss');
+      }
+      return colorByBW ? scaleColorBW(d.bw) : '#a1a1aa';
+    })
+    .attr("stroke-width", d=>scaleWidth(d.bw))
+    .classed("excluded", d=> !!d.excluded);
+}
+
+function ticked(){
+  linkSel
+    .attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
+    .attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);
+
+  linkLabelSel
+    .attr("x", d => (d.source.x + d.target.x)/2 )
+    .attr("y", d => (d.source.y + d.target.y)/2 - 4 );
+
+  nodeSel.attr("cx", d=>d.x).attr("cy", d=>d.y);
+  nodeLabelSel.attr("x", d=>d.x+12).attr("y", d=>d.y+4);
+}
+
+function ensureSim(){
+  if(!sim){
+    sim = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(links).id(d=>d.id).distance(85).strength(0.25))
+      .force("charge", d3.forceManyBody().strength(-260))
+      .force("collision", d3.forceCollide().radius(16).strength(0.9))
+      .force("center", d3.forceCenter(W()/2, H()/2))
+      .on("tick", ticked);
+  }
+  sim.nodes(nodes);
+  sim.force("link").links(links);
+  sim.alpha(0.2).restart();
+}
+
+function rebuild(snap){
+  modeEl.textContent = snap.mode || "—";
+  // Mantener excluded si llega en /graph
+  const excludedList = (snap.excluded_links||[]).map(pair => edgeKey(pair[0],pair[1]));
+  // Nodos
+  nodes = (snap.nodes||[]).map(id => ({ id:String(id) }));
+  // Enlaces (con puertos si vienen)
+  links = (snap.links||[]).map(e => ({
+    source:String(e.u), target:String(e.v),
+    bw:e.bw, weight:e.weight,
+    p_u:e.p_u, p_v:e.p_v,
+    excluded: excludedList.includes(edgeKey(e.u,e.v))
+  }));
+
+  // Layout fijo
+  if (USE_FIXED_LAYOUT) applyFixedLayout(nodes, W(), H());
+
+  syncStats();
+  drawNodes();
+  drawLinks();
+  ensureSim();
+}
+
+function upsertLink(d){
+  const key = edgeKey(d.u, d.v);
+  let L = links.find(e => edgeKey(e.source, e.target) === key);
+  if (!L){
+    L = { source:String(d.u), target:String(d.v), bw:d.bw ?? 0, weight:d.weight ?? 1.0, p_u:d.p_u, p_v:d.p_v };
+    links.push(L);
+  }else{
+    L.bw = d.bw ?? L.bw;
+    L.weight = d.weight ?? L.weight;
+    if (d.p_u!=null && d.p_v!=null){ L.p_u = d.p_u; L.p_v = d.p_v; }
+  }
+  drawLinks();
+  ensureSim();
+  flashEdges([key], "added");
+}
+
+function removeLink(d){
+  const key = edgeKey(d.u, d.v);
+  links = links.filter(e => edgeKey(e.source, e.target) !== key);
+  drawLinks();
+  ensureSim();
+  // efecto visual breve de "removed" sobre lo que quede con la misma key (no aplica ya no está)
+}
+
+function markExcluded(pair, yes){
+  const key = edgeKey(pair[0], pair[1]);
+  links.forEach(e => { if (edgeKey(e.source, e.target) === key) e.excluded = !!yes; });
+  styleLinks();
+}
+
+function flashEdges(keys, cls){
+  const S = new Set(keys);
+  linkSel.classed(cls, d => S.has(edgeKeyFrom(d)));
+  setTimeout(()=> linkSel.classed(cls, false), 1500);
+}
+
+function flashPort(data, isUp){
+  // data: {sw, port}
+  const sw = String(data.sw), p = Number(data.port);
+  // marcar enlaces que toquen ese puerto en ese switch (si tenemos p_u/p_v)
+  const hitKeys = [];
+  links.forEach(e => {
+    const a = String(e.source), b = String(e.target);
+    if ((a===sw && e.p_u===p) || (b===sw && e.p_v===p)) hitKeys.push(edgeKey(a,b));
+  });
+  if (hitKeys.length){
+    flashEdges(hitKeys, isUp ? "added" : "portdown");
+  }
+}
+
+function ensureNode(id){
+  id = String(id);
+  if (!nodes.find(n=>n.id===id)){
+    nodes.push({id});
+    if (USE_FIXED_LAYOUT) applyFixedLayout(nodes, W(), H());
+    syncStats(); drawNodes(); ensureSim();
+  }
+}
+function removeNode(id){
+  id = String(id);
+  nodes = nodes.filter(n=>n.id!==id);
+  links = links.filter(e => e.source!==id && e.target!==id);
+  syncStats(); drawNodes(); drawLinks(); ensureSim();
+}
+
+async function calcPath(){
+  const src = srcSel.value, dst = dstSel.value;
+  pathMsg.textContent = "Calculando…";
+  try{
+    const r = await fetch(API+`/path?src=${encodeURIComponent(src)}&dst=${encodeURIComponent(dst)}`);
+    const j = await r.json();
+    if(!r.ok){ pathMsg.textContent = j.error || "Error"; highlight(null); statC.textContent='Costo: —'; pathMetricsEl.textContent='—'; return; }
+
+    // Compatibilidad: {path,cost} (viejo) vs {paths:[..],costs:[..]} (nuevo)
+    let path = j.path || (Array.isArray(j.paths) ? j.paths[0] : null);
+    let cost = (j.cost!==undefined) ? j.cost :
+               (Array.isArray(j.costs) ? j.costs[0] : undefined);
+
+    if(!path){ pathMsg.textContent = "Sin camino"; highlight(null); statC.textContent='Costo: —'; pathMetricsEl.textContent='—'; return; }
+    pathMsg.textContent = "Camino: " + path.join(" → ");
+    statC.textContent = "Costo: " + (cost!==undefined ? (+cost).toFixed(3) : "—");
+    highlight(path);
+
+    // NUEVO: métricas de camino (usa métricas actuales del backend)
+    try {
+      const r2 = await fetch(API+`/metrics/path?src=${encodeURIComponent(src)}&dst=${encodeURIComponent(dst)}&k=1`);
+      const j2 = await r2.json();
+      if (r2.ok && j2 && j2.best){
+        const best = j2.best;
+        const bn = (best.bottleneck_bps!=null) ? (best.bottleneck_bps/1e6).toFixed(1)+' Mb/s' : '—';
+        const lp = (best.loss_pct!=null) ? (best.loss_pct).toFixed(2)+'%' : '—';
+        pathMetricsEl.textContent = `Bottleneck: ${bn} • Pérdida estimada: ${lp}`;
+      } else {
+        pathMetricsEl.textContent = '—';
+      }
+    } catch { pathMetricsEl.textContent = '—'; }
+  }catch(e){ pathMsg.textContent = "Error de red"; }
+}
+
+function highlight(list){
+  linkSel.classed("path", false);
+  if(!list || list.length<2) return;
+  const set = new Set();
+  for(let i=0;i<list.length-1;i++){
+    const a=String(list[i]), b=String(list[i+1]);
+    set.add(edgeKey(a,b));
+  }
+  linkSel.classed("path", d=> set.has(edgeKeyFrom(d)));
+}
+
+function showDetail(d){
+  const neigh = links.filter(e=> String(e.source)===d.id || String(e.target)===d.id)
+                     .map(e=> String(e.source)===d.id ? String(e.target) : String(e.source) );
+  detail.textContent = JSON.stringify({ id:d.id, vecinos:[...new Set(neigh)] }, null, 2);
+}
+
+function exportSVG(){
+  const serializer = new XMLSerializer();
+  const svgStr = serializer.serializeToString(svg.node());
+  const blob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='netweb_topologia.svg'; a.click();
+  URL.revokeObjectURL(url);
+  toast("Exportado como SVG");
+}
+function toast(msg){
+  const t=document.createElement("div");
+  t.className="fixed bottom-4 right-4 bg-zinc-800 border border-zinc-700 px-3 py-2 rounded-md text-sm";
+  t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),1600);
+}
+
+// ===== MÉTRICAS helpers =====
+function lookupLinkMetric(u, v){
+  if (!metricsCache) return null;
+  const kk = edgeKey(u,v);
+  return metricsCache.__byKey[kk] || null;
+}
+function updateMetricsUI(m){
+  if (!m) return;
+  const tGbps = (m.net && m.net.t_bps_total!=null) ? (m.net.t_bps_total/1e9).toFixed(3) + ' Gb/s' : '—';
+  const loss   = (m.net && m.net.avg_loss_pct!=null) ? m.net.avg_loss_pct.toFixed(2) + '%' : '—';
+  const win    = (m.window_sec!=null) ? m.window_sec.toFixed(2) + ' s' : '—';
+  mTput.textContent = tGbps;
+  mLoss.textContent = loss;
+  mWin.textContent  = win;
+
+  // Top 5 enlaces por throughput
+  const list = (m.link_metrics||[]).slice().sort((a,b)=>b.t_bps - a.t_bps).slice(0,5);
+  topLinksEl.innerHTML = list.map(it => {
+    const t = (it.t_bps/1e6).toFixed(1) + ' Mb/s';
+    const lp = (it.loss_pct!=null) ? it.loss_pct.toFixed(2)+'%' : '—';
+    return `<li>s${it.u}–s${it.v} • t:${t} • loss:${lp}</li>`;
+  }).join("");
+}
+
+// Live updates por SSE (topology, diffs y eventos incrementales)
+(function connectSSE(){
+  try{
+    const es = new EventSource(API + "/events");
+    es.onopen   = ()=> statusEl.textContent = "OK (live)";
+    es.onerror  = ()=> statusEl.textContent = "reconectando…";
+    es.onmessage= (ev)=>{
+      const m = JSON.parse(ev.data);
+      switch(m.type){
+        case "topology": rebuild(m.data); break;
+        case "diff": flashDiff(m); break;
+        case "link_add": upsertLink(m.data); break;
+        case "link_delete": removeLink(m.data); break;
+        case "whatif_excluded": markExcluded(m.link, true); break;
+        case "whatif_included": markExcluded(m.link, false); break;
+        case "port_down": flashPort(m.data, false); break;
+        case "port_up":   flashPort(m.data, true); break;
+        case "switch_enter": ensureNode(m.data.sw); break;
+        case "switch_leave": removeNode(m.data.sw); break;
+        // NUEVO: métrica
+        case "metrics":
+          // Pre-indexar por (u,v)
+          const byKey = {};
+          (m.data.link_metrics||[]).forEach(it => { byKey[edgeKey(it.u, it.v)] = it; });
+          m.data.__byKey = byKey;
+          metricsCache = m.data;
+          updateMetricsUI(metricsCache);
+          refreshLinkLabels();
+          if (metricColorMode !== 'none') styleLinks();
+          break;
+      }
+    };
+  }catch(e){
+    statusEl.textContent = "polling";
+    setInterval(async ()=> {
+      try{ rebuild(await (await fetch(API+"/graph")).json()); }
+      catch(_){ statusEl.textContent="error"; }
+    }, 1500);
+  }
+})();
+
+// Fallback: si no hay SSE metrics aún, poll /metrics suavemente
+setInterval(async () => {
+  if (!metricsCache){
+    try{
+      const r = await fetch(API + "/metrics");
+      if (r.ok){
+        const j = await r.json();
+        j.__byKey = {};
+        (j.link_metrics||[]).forEach(it => { j.__byKey[edgeKey(it.u, it.v)] = it; });
+        metricsCache = j;
+        updateMetricsUI(metricsCache);
+        refreshLinkLabels();
+        if (metricColorMode !== 'none') styleLinks();
+      }
+    }catch(_){}
+  }
+}, 2000);
+
+function flashDiff(d){
+  const add = new Set((d.added||[]).map(pair=> pair.join("-")));
+  const rem = new Set((d.removed||[]).map(pair=> pair.join("-")));
+  linkSel.classed("added", l => add.has([l.source.id,l.target.id].sort().join("-")));
+  linkSel.classed("removed", l => rem.has([l.source.id,l.target.id].sort().join("-")));
+  setTimeout(()=> { linkSel.classed("added", false).classed("removed", false); }, 1800);
+}
+</script>
+</body>
+</html>
