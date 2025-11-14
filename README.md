@@ -288,4 +288,4 @@ sudo python3 nsfnet_topologyx.py --controller_ip 192.168.18.40 --controller_port
 * scripts `run_all.sh` que arranquen Ryu + Flask + Mininet (con pausa y checks),
 * fragmentos de `systemd` para ejecutar el Flask app o ryu-manager en arranque.
 
-¿Quieres que prepare los scripts `run_ryu.sh`, `run_flask.sh` y `run_mininet.sh` listos para ejecutar?
+
