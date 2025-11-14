@@ -283,7 +283,6 @@ sudo python3 nsfnet_topologyx.py --controller_ip 192.168.18.40 --controller_port
 
 ---
 
-Si quieres, añado al README:
 
 * instrucciones para instalar `traceroute/iperf` en la VM Mininet,
 * scripts `run_all.sh` que arranquen Ryu + Flask + Mininet (con pausa y checks),
