@@ -1,5 +1,5 @@
 # SDN-Implementation-of-Proactive-Routing-with-Real-Time-Web-Monitoring
-Perfecto — aquí tienes el **README.md** listo para subir a GitHub, escrito en **español**, con las versiones, la explicación breve, y **exactamente los comandos que indicaste** (en el orden correcto), ejemplos de uso (curl / Postman), comprobaciones y soluciones rápidas. Pega esto en el README de tu repo.
+
 
 ---
 
